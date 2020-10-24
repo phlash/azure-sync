@@ -44,7 +44,7 @@ log(0, 'reading blob info..')
 blist = {}
 for blob in blob_client.list_blobs(container, include=Include(metadata=True)):
     blist[blob.name] = blob
-    if (len(blist)%100)==0:
+    if (len(blist)%1000)==0:
         log(0, ' %d blobs..'%(len(blist),))
 log(0, ' %d blobs'%(len(blist,)))
 
@@ -58,6 +58,10 @@ for tgt in sys.argv[1:]:
         for fil in files:
             cnt += 1
             nam = os.path.join(root, fil);
+            # Skip symlinks entirely
+            if os.path.islink(nam):
+                log(1, ' symlink: %s'%(nam,))
+                continue
             # Existing backup file, check if transfer required (and which way)
             if nam in blist:
                 # blob info..
@@ -99,7 +103,7 @@ log(0, ' %d local files'%(cnt,))
 
 # Any remaining blobs are non-local files, pull 'em
 for b in blist:
-    pull.append(b.name)
+    pull.append(b)
 
 log(0, 'pushing local changes (%d)..'%(len(push),))
 tot = len(push)
@@ -111,7 +115,7 @@ for nam in push:
     log(1, ' %d: %s'%(os.path.getsize(nam), nam))
     blob_client.create_blob_from_path(container, nam, nam, metadata=md)
     cnt += 1
-    if (cnt%1)==0:
+    if (cnt%10)==0:
         log(0, ' %d of %d: %s'%(cnt, tot, nam))
 
 log(0, 'pulling remote changes (%d) to: %s'%(len(pull),pfx))
