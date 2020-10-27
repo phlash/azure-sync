@@ -8,6 +8,9 @@
 // Reads file on stdin, emits boundaries on stdout
 #include <stdio.h>
 #include <openssl/md5.h>
+#include <openssl/bio.h>
+#include <openssl/evp.h>
+#include <openssl/buffer.h>
 
 #define WINSIZ  8196
 #define MINBLK  (256*1024)
@@ -16,10 +19,19 @@
 
 void emit(unsigned long len, MD5_CTX *pmd5) {
     unsigned char h[MD5_DIGEST_LENGTH];
+    BIO *bmem, *b64;
+    BUF_MEM *bptr;
     MD5_Final(h, pmd5);
-    printf("%ld %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n",
-        len, h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7],
-             h[8], h[9], h[10], h[11], h[12], h[13], h[14], h[15]);
+    // all this fugly code to produce base64 text using libcrypto, from:
+    // https://ioncannon.net/programming/34/howto-base64-encode-with-cc-and-openssl/
+    bmem = BIO_new(BIO_s_mem());
+    b64 = BIO_new(BIO_f_base64());
+    b64 = BIO_push(b64, bmem);
+    BIO_write(b64, h, MD5_DIGEST_LENGTH);
+    BIO_flush(b64);
+    BIO_get_mem_ptr(b64, &bptr);
+    printf("%ld %.*s\n", len, bptr->length-1, bptr->data);
+    BIO_free_all(b64);
 }
 
 int main() {
@@ -31,6 +43,7 @@ int main() {
     MD5_Init(&mdb);
     MD5_Init(&mdt);
     while ((n=fread(buf, 1, BUFSIZ, stdin))>0) {
+        // byte-by-painful-byte (but not the I/O!)
         for (int i=0; i<n; i++) {
             // set dirty bit
             d=1;
@@ -65,12 +78,13 @@ int main() {
                 MD5_Init(&mdb);
             }
         }
+        // add I/O buffer to whole file MD5
         MD5_Update(&mdt, buf, n);
     }
     // print last block if dirty
     if (d)
         emit(p-l, &mdb);
-    // print full MD5 of file
+    // print MD5 of whole file
     emit(0, &mdt);
     return 0;
 }
