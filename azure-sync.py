@@ -84,8 +84,9 @@ def readlocal(blob_client, blist, paths):
                 if os.path.islink(nam):
                     log(1, ' symlink: %s'%(nam,))
                     continue
-                # Always get slices..
+                # Always get slices & stat..
                 lslc = getslices(nam)
+                lstt = os.stat(nam)
                 log(1, ' sliced(%d): %s'%(len(lslc)-1,nam))
                 # Existing backup file, check if transfer required (and which way)
                 if nam in blist:
@@ -99,7 +100,6 @@ def readlocal(blob_client, blist, paths):
                     # local file info (whole file hash is last slice info)
                     lsiz = os.path.getsize(nam)
                     lhsh = lslc[-1:][0][1]
-                    lstt = os.stat(nam)
                     ltim = lstt.st_mtime
                     log(2, '  [b/l](siz:%d/%d hsh:%s/%s tim:%d/%d)'%(bsiz,lsiz,bhsh,lhsh,btim,ltim))
                     # Skip matching files (size & hash)
