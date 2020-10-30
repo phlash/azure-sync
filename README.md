@@ -15,7 +15,9 @@ Files are sync'ed based on:
  * Timestamp - newer is pushed to older
 
 NB: Azure storage will always set 'last modified' to the time of last blob write,
-thus in order to preserve the source file timestamp, we use a metadata propery.
+thus in order to preserve the source file timestamp, we use a metadata property:
+indeed we also wish to preserve file mode and ownership, so we store these in
+blob metedata too.
 
 Sync for each file uses dynamic content slicing, taking advantage of Azure blob
 blocks, to reduce the amount of data that needs to be copied across the network.
