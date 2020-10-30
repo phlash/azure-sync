@@ -2,7 +2,10 @@
 
 Because Debian has python3-azure-storage out-of-the-box, and it works
 nicely to push files into Azure blob storage... let's try writing a
-file sync client!
+file sync client, inspired by Ken Faulkner's
+[BlobSync](https://github.com/kpfaulkner/BlobSync) but avoiding the
+separate storage file(s) he uses to hold rsync-compatible signatures,
+we'll work entirely with Azure metadata :)
 
 ## Principle
 
