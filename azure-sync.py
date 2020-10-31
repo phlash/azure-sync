@@ -241,6 +241,20 @@ def applystat(pfx, nam, st, nowr):
 ### Entry point ###
 
 if __name__ == '__main__':
+    # argument processing
+    dopush = True
+    dopull = True
+    paths = []
+    for arg in sys.argv[1:]:
+        if arg.startswith('-pull') or arg.startswith('--pull'):
+            dopush = False
+        elif arg.startswith('-push') or arg.startswith('--push'):
+            dopull = False
+        elif arg.startswith('-h') or arg.startswith('--h'):
+            print('usage: azure-sync.py [-pullonly] [-pushonly] <path> [...]')
+            sys.exit(0)
+        else:
+            paths.append(arg)
     # connect to Azure storage
     blob_client = BlockBlobService(account_name=os.getenv('AZURE_STORAGE_ACCOUNT'), account_key=os.getenv('AZURE_STORAGE_KEY'))
     container = os.getenv('AZURE_SYNC_CONTAINER')
@@ -255,10 +269,10 @@ if __name__ == '__main__':
     nowr = os.getenv('AZURE_SYNC_NOWRITE', None)
 
     # list blobs..
-    blist = listblobs(blob_client, sys.argv[1:])
+    blist = listblobs(blob_client, paths)
 
     # read local files, determine actions..
-    (push, pull) = readlocal(blob_client, blist, sys.argv[1:])
+    (push, pull) = readlocal(blob_client, blist, paths)
 
     # Any remaining blobs are non-local files, pull 'em as tuple (name,None,None,stat)
     for nam in blist:
@@ -267,32 +281,38 @@ if __name__ == '__main__':
     log(0, '%d non-local files'%(len(blist),))
 
     # Take actions!
-    tot = len(push)
-    cnt = 0
-    log(0, 'pushing local changes (%d)..'%(tot,))
-    for (nam,slcs,blks,st) in push:
-        # Add blob metadata
-        md = {}
-        addfilestat(md, st)
-        lhsh = slcs[-1:][0][1]
-        cs = ContentSettings(content_md5=lhsh)
-        if None==blks:
-            localOnlyPush(nam, slcs, md, cs, nowr)
-        else:
-            localModifiedPush(nam, slcs, blks, md, cs, nowr)
-        cnt += 1
-        log(0, ' %d of %d: %s'%(cnt, tot, nam))
+    if dopush:
+        tot = len(push)
+        cnt = 0
+        log(0, 'pushing local changes (%d)..'%(tot,))
+        for (nam,slcs,blks,st) in push:
+            # Add blob metadata
+            md = {}
+            addfilestat(md, st)
+            lhsh = slcs[-1:][0][1]
+            cs = ContentSettings(content_md5=lhsh)
+            if None==blks:
+                localOnlyPush(nam, slcs, md, cs, nowr)
+            else:
+                localModifiedPush(nam, slcs, blks, md, cs, nowr)
+            cnt += 1
+            log(0, ' %d of %d: %s'%(cnt, tot, nam))
+    else:
+        log(0, 'NOT pushed: %d changes'%(len(push),))
 
-    log(0, 'pulling remote changes to prefix: %s (%d)..'%(pfx,len(pull)))
-    tot = len(pull)
-    cnt = 0
-    for (nam,slcs,blks,st) in pull:
-        if None==slcs or None==blks:
-            remoteOnlyPull(pfx, nam, nowr)
-        else:
-            remoteModifiedPull(pfx, nam, slcs, blks, nowr)
-        applystat(pfx, nam, st, nowr)
-        cnt += 1
-        log(0, ' %d of %d: %s'%(cnt, tot, nam))
+    if dopull:
+        tot = len(pull)
+        cnt = 0
+        log(0, 'pulling remote changes to prefix: %s (%d)..'%(pfx,tot))
+        for (nam,slcs,blks,st) in pull:
+            if None==slcs or None==blks:
+                remoteOnlyPull(pfx, nam, nowr)
+            else:
+                remoteModifiedPull(pfx, nam, slcs, blks, nowr)
+            applystat(pfx, nam, st, nowr)
+            cnt += 1
+            log(0, ' %d of %d: %s'%(cnt, tot, nam))
+    else:
+        log(0, 'NOT pulled: %d changes'%(len(pull),))
 
     log(0, 'sync done!')
