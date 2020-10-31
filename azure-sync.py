@@ -3,7 +3,7 @@
 # Sync files between local storage and Azure blob storage
 # @see README.md for principles used
 
-import sys, os, tempfile, datetime, subprocess, json
+import sys, os, tempfile, datetime, subprocess, json, syslog
 from dotenv import load_dotenv
 from azure.storage.blob import BlockBlobService, BlobBlock, Include, ContentSettings
 
@@ -12,9 +12,21 @@ load_dotenv()
 
 # verbosity in environment
 verb = int(os.getenv('AZURE_SYNC_VERBOSE', '0'))
+# the following method to read a boolean from a string is from here:
+# https://stackoverflow.com/questions/715417/converting-from-a-string-to-boolean-in-python
+# write to stdout?
+tostd = bool(json.loads(os.getenv('AZURE_SYNC_STDOUT', 'True').lower()))
+# write to syslog?
+tosys = bool(json.loads(os.getenv('AZURE_SYNC_SYSLOG', 'False').lower()))
+if tosys:
+    syslog.openlog(logoption=syslog.LOG_PID)
+
 def log(v, m):
     if v <= verb:
-        print(m)
+        if tostd:
+            print(m)
+        if tosys:
+            syslog.syslog(syslog.LOG_INFO, m)
 
 
 ### Functions ###
@@ -255,6 +267,8 @@ if __name__ == '__main__':
             sys.exit(0)
         else:
             paths.append(arg)
+    # start marker
+    log(0, 'sync starting..')
     # connect to Azure storage
     blob_client = BlockBlobService(account_name=os.getenv('AZURE_STORAGE_ACCOUNT'), account_key=os.getenv('AZURE_STORAGE_KEY'))
     container = os.getenv('AZURE_SYNC_CONTAINER')
