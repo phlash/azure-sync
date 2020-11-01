@@ -45,16 +45,15 @@ def getslices(pth):
             slices.append((int(s[0]),s[1]))
         return slices
 
-# list remote blobs, filtered by input paths
-def listblobs(blob_client, paths):
-    log(0, 'reading blob info..')
+# list remote blobs, filtered by input path
+def listblobs(blob_client, path):
+    log(0, 'reading blob info (%s)..'%(path,))
     blist = {}
-    for tgt in paths:
-        for blob in blob_client.list_blobs(container, prefix=tgt, include=Include(metadata=True)):
-            blist[blob.name] = blob
-            if (len(blist)%1000)==0:
-                log(0, ' %d blobs..'%(len(blist),))
-    log(0, '%d blobs'%(len(blist,)))
+    for blob in blob_client.list_blobs(container, prefix=path, include=Include(metadata=True)):
+        blist[blob.name] = blob
+        if (len(blist)%1000)==0:
+            log(0, ' %d blobs..'%(len(blist),))
+    log(0, '%d blobs (%s)'%(len(blist),path))
     return blist
 
 # parse file stat object from dict, with default
@@ -82,58 +81,62 @@ def addfilestat(md, st):
     md['filestat'] = json.dumps(tmp)
 
 # read local files, determine actions / read block lists
-def readlocal(blob_client, blist, paths):
-    log(0, 'reading local file info..')
+def readlocal(blob_client, blist, path):
+    log(0, 'reading local file info (%s)..'%(path,))
     push = []
     pull = []
     cnt = 0
-    for tgt in paths:
-        for root, subs, files in os.walk(tgt):
-            for fil in files:
-                cnt += 1
-                nam = os.path.join(root, fil);
-                # Skip symlinks entirely
-                if os.path.islink(nam):
-                    log(1, ' symlink: %s'%(nam,))
+    for root, subs, files in os.walk(path):
+        for fil in files:
+            cnt += 1
+            nam = os.path.join(root, fil);
+            # Skip symlinks entirely
+            if os.path.islink(nam):
+                log(1, ' symlink: %s'%(nam,))
+                continue
+            # Always get stat..
+            lstt = os.stat(nam)
+            log(1, ' compare(%d): %s'%(lstt.st_size,nam))
+            if nam in blist:
+                # Existing blob, check if transfer required (and which way)
+                # blob info..
+                bsiz = blist[nam].properties.content_length
+                bstt = getfilestat(blist[nam].metadata, blist[nam].properties.last_modified)
+                btim = bstt.st_mtime
+                bhsh = blist[nam].properties.content_settings.content_md5
+                blist.pop(nam, None)
+                # local file info (whole file hash is last slice info)
+                lsiz = lstt.st_size
+                ltim = lstt.st_mtime
+                log(2, '  [b/l](siz:%d/%d tim:%d/%d)'%(bsiz,lsiz,btim,ltim))
+                # Skip matching files (size & timestamp) avoiding slower slicing
+                if lsiz == bsiz and ltim == btim:
+                    log(2, '  skip (same size/timestamp)')
                     continue
-                # Always get slices & stat..
+                # Now slice & check hashes
                 lslc = getslices(nam)
-                lstt = os.stat(nam)
-                log(1, ' sliced(%d): %s'%(len(lslc)-1,nam))
-                # Existing backup file, check if transfer required (and which way)
-                if nam in blist:
-                    # blob info..
-                    bsiz = blist[nam].properties.content_length
-                    bhsh = blist[nam].properties.content_settings.content_md5
-                    bstt = getfilestat(blist[nam].metadata, blist[nam].properties.last_modified)
-                    btim = bstt.st_mtime
-                    # now remove from blob list, as we have 'seen' this locally
-                    blist.pop(nam, None)
-                    # local file info (whole file hash is last slice info)
-                    lsiz = os.path.getsize(nam)
-                    lhsh = lslc[-1:][0][1]
-                    ltim = lstt.st_mtime
-                    log(2, '  [b/l](siz:%d/%d hsh:%s/%s tim:%d/%d)'%(bsiz,lsiz,bhsh,lhsh,btim,ltim))
-                    # Skip matching files (size & hash)
-                    if lsiz == bsiz and lhsh == bhsh:
-                        log(2, '  skip (same size/hash)')
-                        continue
-                    # We'll need the block list then..
-                    blks = blob_client.get_block_list(container, nam, block_list_type='committed').committed_blocks
-                    if btim > ltim:
-                        # Remote is newer, put on pull list as tuple: (name,slices,blocks,stat)
-                        pull.append((nam,lslc,blks,bstt))
-                        log(2, '  pull (blob newer)')
-                    else:
-                        # Local is newer (or the same timestamp but different hash/size), put on push list
-                        # as tuple (name,slices,blocks,stat)
-                        push.append((nam,lslc,blks,lstt))
-                        log(2, '  push (local same/newer)')
+                lhsh = lslc[-1:][0][1]
+                log(2, '  [b/l](hsh:%s/%s)'%(bhsh,lhsh))
+                if lhsh == bhsh:
+                    log(2, '  skip (same hash)')
+                    continue
+                # We'll need the block list now..
+                blks = blob_client.get_block_list(container, nam, block_list_type='committed').committed_blocks
+                if btim > ltim:
+                    # Remote is newer, put on pull list as tuple: (name,slices,blocks,stat)
+                    pull.append((nam,lslc,blks,bstt))
+                    log(2, '  pull (blob newer)')
                 else:
-                    # New local file, push it as tuple (name,slices,None,stat)
-                    push.append((nam,lslc,None,lstt))
-                    log(2, '  push (no blob)')
-    log(0, '%d local files'%(cnt,))
+                    # Local is newer (or the same timestamp but different hash/size), put on push list
+                    # as tuple (name,slices,blocks,stat)
+                    push.append((nam,lslc,blks,lstt))
+                    log(2, '  push (local same/newer)')
+            else:
+                # New local file, push it as tuple (name,slices,None,stat)
+                lslc = getslices(nam)
+                push.append((nam,lslc,None,lstt))
+                log(2, '  push (no blob)')
+    log(0, '%d local files (%s)'%(cnt,path))
     return (push, pull)
 
 
@@ -254,21 +257,31 @@ def applystat(pfx, nam, st, nowr):
 
 if __name__ == '__main__':
     # argument processing
-    dopush = True
-    dopull = True
+    dopush = False
+    dopull = False
+    donuke = False
     paths = []
     for arg in sys.argv[1:]:
-        if arg.startswith('-pull') or arg.startswith('--pull'):
-            dopush = False
-        elif arg.startswith('-push') or arg.startswith('--push'):
-            dopull = False
+        if arg.startswith('-push') or arg.startswith('--push'):
+            dopush = True
+        elif arg.startswith('-pull') or arg.startswith('--pull'):
+            dopull = True
+        elif arg.startswith('-del') or arg.startswith('--del'):
+            donuke = True
         elif arg.startswith('-h') or arg.startswith('--h'):
-            print('usage: azure-sync.py [-pullonly] [-pushonly] <path> [...]')
+            print('usage: azure-sync.py [-push] [-pull] [-delete] <path> [...]\n')
+            print('Not specifying -push or -pull will show difference counts.')
+            print('-delete can be combined with one of -push or -pull and will')
+            print('delete files at the receiving end if they are not at the sender.')
+            print('Thus combining -push -pull and -delete is illegal.')
             sys.exit(0)
         else:
             paths.append(arg)
+        if dopush and dopull and donuke:
+            log(0, 'argument error: cannot specify push, pull and delete')
+            sys.exit(1)
     # start marker
-    log(0, 'sync starting..')
+    log(0, 'sync starting, push=%s, pull=%s, delete=%s..'%(str(dopush),str(dopull),str(donuke)))
     # connect to Azure storage
     blob_client = BlockBlobService(account_name=os.getenv('AZURE_STORAGE_ACCOUNT'), account_key=os.getenv('AZURE_STORAGE_KEY'))
     container = os.getenv('AZURE_SYNC_CONTAINER')
@@ -282,51 +295,61 @@ if __name__ == '__main__':
     # read no-write flag
     nowr = os.getenv('AZURE_SYNC_NOWRITE', None)
 
-    # list blobs..
-    blist = listblobs(blob_client, paths)
-
-    # read local files, determine actions..
-    (push, pull) = readlocal(blob_client, blist, paths)
-
-    # Any remaining blobs are non-local files, pull 'em as tuple (name,None,None,stat)
-    for nam in blist:
-        log(1, ' non-local: %s'%(nam,))
-        pull.append((nam,None,None,getfilestat(blist[nam].metadata,blist[nam].properties.last_modified)))
-    log(0, '%d non-local files'%(len(blist),))
-
-    # Take actions!
-    if dopush:
-        tot = len(push)
-        cnt = 0
-        log(0, 'pushing local changes (%d)..'%(tot,))
-        for (nam,slcs,blks,st) in push:
-            # Add blob metadata
-            md = {}
-            addfilestat(md, st)
-            lhsh = slcs[-1:][0][1]
-            cs = ContentSettings(content_md5=lhsh)
-            if None==blks:
-                localOnlyPush(nam, slcs, md, cs, nowr)
-            else:
-                localModifiedPush(nam, slcs, blks, md, cs, nowr)
-            cnt += 1
-            log(0, ' %d of %d: %s'%(cnt, tot, nam))
-    else:
-        log(0, 'NOT pushed: %d changes'%(len(push),))
-
-    if dopull:
-        tot = len(pull)
-        cnt = 0
-        log(0, 'pulling remote changes to prefix: %s (%d)..'%(pfx,tot))
-        for (nam,slcs,blks,st) in pull:
-            if None==slcs or None==blks:
-                remoteOnlyPull(pfx, nam, nowr)
-            else:
-                remoteModifiedPull(pfx, nam, slcs, blks, nowr)
-            applystat(pfx, nam, st, nowr)
-            cnt += 1
-            log(0, ' %d of %d: %s'%(cnt, tot, nam))
-    else:
-        log(0, 'NOT pulled: %d changes'%(len(pull),))
+    # iterate specified sync paths..
+    for path in paths:
+        # list blobs..
+        blist = listblobs(blob_client, path)
+        # read local files, determine actions..
+        (push, pull) = readlocal(blob_client, blist, path)
+        # Any remaining blobs are non-local files, pull 'em as tuple (name,None,None,stat)
+        for nam in blist:
+            log(1, ' non-local: %s'%(nam,))
+            pull.append((nam,None,None,getfilestat(blist[nam].metadata,blist[nam].properties.last_modified)))
+        log(0, '%d non-local files'%(len(blist),))
+        # Take actions!
+        if dopush:
+            tot = len(push)
+            cnt = 0
+            log(0, 'pushing local changes (%d)..'%(tot,))
+            for (nam,slcs,blks,st) in push:
+                # Add blob metadata
+                md = {}
+                addfilestat(md, st)
+                lhsh = slcs[-1:][0][1]
+                cs = ContentSettings(content_md5=lhsh)
+                if None==blks:
+                    localOnlyPush(nam, slcs, md, cs, nowr)
+                else:
+                    localModifiedPush(nam, slcs, blks, md, cs, nowr)
+                cnt += 1
+                log(0, ' %d of %d: %s'%(cnt, tot, nam))
+            if donuke:
+                # We're nuking non-local files
+                for (nam,slcs,blks,st) in pull:
+                    if None==slcs:
+                        blob_client.delete_blob(container, nam)
+                        log(1, ' deleted non-local: %s'%(nam,))
+        else:
+            log(0, 'NOT pushed: %d changes'%(len(push),))
+        if dopull:
+            tot = len(pull)
+            cnt = 0
+            log(0, 'pulling remote changes to prefix: %s (%d)..'%(pfx,tot))
+            for (nam,slcs,blks,st) in pull:
+                if None==slcs:
+                    remoteOnlyPull(pfx, nam, nowr)
+                else:
+                    remoteModifiedPull(pfx, nam, slcs, blks, nowr)
+                applystat(pfx, nam, st, nowr)
+                cnt += 1
+                log(0, ' %d of %d: %s'%(cnt, tot, nam))
+            if donuke:
+                # We're nuking local-only files
+                for (nam,slcs,blks,st) in push:
+                    if None==blks:
+                        os.remove(pfx+nam)
+                        log(1, ' deleted local-only: %s'%(pfx+nam,))
+        else:
+            log(0, 'NOT pulled: %d changes'%(len(pull),))
 
     log(0, 'sync done!')
