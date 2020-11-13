@@ -149,47 +149,53 @@ def loadChunk(nam, off, siz):
 # local-only file, push all the blocks and commit the blob
 def localOnlyPush(nam, slcs, md, cs, nowr):
     log(1, ' L %s'%(nam,))
-    off = 0
-    blst = []
-    for slc in slcs:
-        # skip zero length slices
-        if slc[0] == 0:
-            continue
-        log(2, '  > %d->%d (%s)'%(off, off+slc[0], slc[1]))
-        if not nowr:
-            blob_client.put_block(container, nam, loadChunk(nam, off, slc[0]), slc[1])
-        blst.append(BlobBlock(slc[1]))
-        off += slc[0]
-    log(2, ' > %s: %s'%(nam, str([b.id for b in blst])))
-    if not nowr:
-        blob_client.put_block_list(container, nam, blst, metadata=md, content_settings=cs)
-
-# local modified file, assemble blocks from existing, or push non-existing, commit the blob
-def localModifiedPush(nam, slcs, blks, md, cs, nowr):
-    log(1, ' M %s: %s'%(nam, str([b.id for b in blks])))
-    off = 0
-    blst = []
-    for slc in slcs:
-        # skip zero length slices
-        if slc[0] == 0:
-            continue
-        # search blks for existing hash
-        blk = next((b for b in blks if b.id == slc[1]), None)
-        if blk:
-            # existing block, put back on list
-            blst.append(blk)
-            log(2, '  | %d->%d (%s)'%(off, off+slc[0], slc[1]))
-        else:
-            # non-existing block, push and add to list
+    try:
+        off = 0
+        blst = []
+        for slc in slcs:
+            # skip zero length slices
+            if slc[0] == 0:
+                continue
             log(2, '  > %d->%d (%s)'%(off, off+slc[0], slc[1]))
             if not nowr:
                 blob_client.put_block(container, nam, loadChunk(nam, off, slc[0]), slc[1])
             blst.append(BlobBlock(slc[1]))
-        off += slc[0]
-    log(2, ' > %s: %s'%(nam, str([b.id for b in blst])))
-    if not nowr:
-        blob_client.put_block_list(container, nam, blst, metadata=md, content_settings=cs)
-        
+            off += slc[0]
+        log(2, ' > %s: %s'%(nam, str([b.id for b in blst])))
+        if not nowr:
+            blob_client.put_block_list(container, nam, blst, metadata=md, content_settings=cs)
+    except FileNotFoundError:
+        log(1, ' gone away: %s'%(nam,))
+ 
+# local modified file, assemble blocks from existing, or push non-existing, commit the blob
+def localModifiedPush(nam, slcs, blks, md, cs, nowr):
+    log(1, ' M %s: %s'%(nam, str([b.id for b in blks])))
+    try:
+        off = 0
+        blst = []
+        for slc in slcs:
+            # skip zero length slices
+            if slc[0] == 0:
+                continue
+            # search blks for existing hash
+            blk = next((b for b in blks if b.id == slc[1]), None)
+            if blk:
+                # existing block, put back on list
+                blst.append(blk)
+                log(2, '  | %d->%d (%s)'%(off, off+slc[0], slc[1]))
+            else:
+                # non-existing block, push and add to list
+                log(2, '  > %d->%d (%s)'%(off, off+slc[0], slc[1]))
+                if not nowr:
+                    blob_client.put_block(container, nam, loadChunk(nam, off, slc[0]), slc[1])
+                blst.append(BlobBlock(slc[1]))
+            off += slc[0]
+        log(2, ' > %s: %s'%(nam, str([b.id for b in blst])))
+        if not nowr:
+            blob_client.put_block_list(container, nam, blst, metadata=md, content_settings=cs)
+    except FileNotFoundError:
+        log(1, ' gone away: %s'%(nam,))
+
 # remote-only file, pull to temporary file, rename
 def remoteOnlyPull(pfx, nam, nowr):
     pth = pfx+nam
